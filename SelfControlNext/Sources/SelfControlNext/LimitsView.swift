@@ -134,36 +134,7 @@ struct LimitEditorSheet: View {
             .padding(20)
 
             Form {
-                Section {
-                    Toggle("Limit enabled", isOn: $draft.enabled)
-                    Picker("Schedule", selection: $draft.customDays) {
-                        Text("Every Day").tag(false)
-                        Text("Custom Days").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .disabled(!draft.enabled)
-                }
-
-                Section("Time allowed") {
-                    if draft.customDays {
-                        ForEach(Weekdays.ordered, id: \.self) { wd in
-                            HStack {
-                                Toggle(Weekdays.name(wd), isOn: $draft.perDayEnabled[wd - 1])
-                                Spacer()
-                                if draft.perDayEnabled[wd - 1] {
-                                    DurationPicker(minutes: $draft.perDayMinutes[wd - 1])
-                                } else {
-                                    Text("No limit").foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    } else {
-                        LabeledContent("Each day") {
-                            DurationPicker(minutes: $draft.dailyMinutes)
-                        }
-                    }
-                }
-                .disabled(!draft.enabled)
+                AllowanceFields(allowance: $draft)
 
                 if locked {
                     Section {
@@ -208,5 +179,43 @@ struct LimitEditorSheet: View {
             store.config.limits[i] = draft
         }
         dismiss()
+    }
+}
+
+/// The "enabled / every day or custom days / time allowed" fields of a limit editor.
+struct AllowanceFields<A: DailyAllowance>: View {
+    @Binding var allowance: A
+
+    var body: some View {
+        Section {
+            Toggle("Limit enabled", isOn: $allowance.enabled)
+            Picker("Schedule", selection: $allowance.customDays) {
+                Text("Every Day").tag(false)
+                Text("Custom Days").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(!allowance.enabled)
+        }
+
+        Section("Time allowed") {
+            if allowance.customDays {
+                ForEach(Weekdays.ordered, id: \.self) { wd in
+                    HStack {
+                        Toggle(Weekdays.name(wd), isOn: $allowance.perDayEnabled[wd - 1])
+                        Spacer()
+                        if allowance.perDayEnabled[wd - 1] {
+                            DurationPicker(minutes: $allowance.perDayMinutes[wd - 1])
+                        } else {
+                            Text("No limit").foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else {
+                LabeledContent("Each day") {
+                    DurationPicker(minutes: $allowance.dailyMinutes)
+                }
+            }
+        }
+        .disabled(!allowance.enabled)
     }
 }

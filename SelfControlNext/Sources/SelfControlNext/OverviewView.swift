@@ -178,7 +178,7 @@ struct OverviewView: View {
 
     private var websitesCard: some View {
         let sites = store.topSites(limit: 5)
-        let limit = store.effectiveRules.websites.limitSeconds
+        let rules = store.effectiveRules.websites
         return Card {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -191,7 +191,7 @@ struct OverviewView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(sites, id: \.domain) { site in
-                        let whitelisted = store.effectiveRules.websites.isWhitelisted(host: site.domain)
+                        let limit = rules.limitSeconds(for: site.domain)
                         HStack(spacing: 10) {
                             TargetIcon(target: .website(site.domain), size: 22)
                             VStack(alignment: .leading, spacing: 3) {
@@ -202,7 +202,7 @@ struct OverviewView: View {
                                         .foregroundStyle(.secondary).monospacedDigit()
                                 }
                                 .font(.callout)
-                                UsageBar(used: site.seconds, limit: whitelisted ? nil : limit)
+                                UsageBar(used: site.seconds, limit: limit)
                             }
                         }
                     }

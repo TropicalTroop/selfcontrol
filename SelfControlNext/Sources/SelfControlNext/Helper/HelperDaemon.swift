@@ -321,10 +321,11 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPCProtocol, @u
         }
         blocked.formUnion(state.websiteBlocks.filter { $0.value > now }.keys)
         // In Strict Mode, don't rely on the app: block over-limit sites from our own usage record.
-        if state.strict != nil, let rules = state.rules, let limit = rules.websites.limitSeconds {
-            for (domain, seconds) in state.webUsage[dayKey(now)] ?? [:]
-            where seconds >= limit && !rules.websites.isWhitelisted(host: domain) {
-                blocked.insert(domain)
+        if state.strict != nil, let rules = state.rules {
+            for (domain, seconds) in state.webUsage[dayKey(now)] ?? [:] {
+                if let limit = rules.websites.limitSeconds(for: domain, on: now), seconds >= limit {
+                    blocked.insert(domain)
+                }
             }
         }
         return (blocked.sorted(), allowlist)

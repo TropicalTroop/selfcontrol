@@ -7,6 +7,7 @@ version-header.h
 
 *~.nib
 
+claudefile.md
 # Xcode
 build/
 DerivedData/

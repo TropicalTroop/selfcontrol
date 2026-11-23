@@ -180,7 +180,8 @@ final class Monitor: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func warnAboutSite(_ domain: String) {
-        guard store.config.settings.warnings, let limit = store.effectiveRules.websites.limitSeconds else { return }
+        guard store.config.settings.warnings,
+              let limit = store.effectiveRules.websites.limitSeconds(for: domain) else { return }
         let remaining = limit - store.webUsage(for: domain)
         if remaining > 0 && remaining <= 300, store.markWarned("web|\(domain)|5") {
             notify(id: "web-\(domain)", title: "5 minutes left on \(domain)",

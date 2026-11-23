@@ -8,7 +8,7 @@ enum Constants {
     static let helperPath = "/Library/PrivilegedHelperTools/org.eyebeam.SelfControlNext.helper"
     static let helperPlistPath = "/Library/LaunchDaemons/org.eyebeam.SelfControlNext.helper.plist"
     /// Bump whenever the helper's behavior or protocol changes so the app offers an update.
-    static let helperVersion = 3
+    static let helperVersion = 4
 
     /// Apps that are never blocked, regardless of rules.
     static let essentialBundleIDs: Set<String> = [
@@ -73,8 +73,29 @@ struct Rules: Codable, Equatable {
         if ow.enabled {
             if !nw.enabled {
                 problems.append("turn off website limits")
-            } else if nw.minutesPerSite > ow.minutesPerSite {
-                problems.append("raise the website limit")
+            } else {
+                if ow.limitAllSites && !nw.limitAllSites {
+                    problems.append("turn off the limit for other websites")
+                } else if ow.limitAllSites && nw.minutesPerSite > ow.minutesPerSite {
+                    problems.append("raise the limit for other websites")
+                }
+                // Compare each site's effective limit, so adding or changing a site's own limit can't
+                // give it more time than it had before.
+                let domains = Set(ow.siteLimits.map(\.domain) + nw.siteLimits.map(\.domain)).sorted()
+                for domain in domains {
+                    for wd in 1...7 {
+                        guard let before = ow.minutes(forSite: domain, weekday: wd) else { continue }
+                        if let after = nw.minutes(forSite: domain, weekday: wd), after <= before { continue }
+                        if ow.siteLimit(for: domain) == nil {
+                            problems.append("give \(domain) a higher limit")
+                        } else if nw.siteLimit(for: domain) == nil {
+                            problems.append("remove the limit on \(domain)")
+                        } else {
+                            problems.append("raise \(domain)'s limit on \(Weekdays.name(wd))")
+                        }
+                        break
+                    }
+                }
             }
             let oldWhitelist = Set(ow.whitelist)
             if let added = nw.whitelist.first(where: { !oldWhitelist.contains($0) }) {
@@ -91,15 +112,6 @@ extension Rules {
         limits = c.value(.limits, [])
         downtime = c.value(.downtime, DowntimeSchedule())
         websites = c.value(.websites, WebsiteLimits())
-    }
-}
-
-extension AppLimit {
-    /// Minutes allowed on a weekday, or nil if there's no limit that day.
-    func minutes(forWeekday weekday: Int) -> Int? {
-        guard enabled else { return nil }
-        if !customDays { return dailyMinutes }
-        return perDayEnabled[weekday - 1] ? perDayMinutes[weekday - 1] : nil
     }
 }
 
@@ -162,8 +174,8 @@ enum Enforcement {
             if focus.mode == .allowlist && !focus.allowsSite(host) { return .focus(until: focus.end) }
             exempt = exemptionsAllowed && focus.allowsSite(host)
         }
-        guard let rules, !exempt, !rules.websites.isWhitelisted(host: host),
-              let limit = rules.websites.limitSeconds, usage >= limit, !isOverridden("web") else { return nil }
+        guard let rules, !exempt, let limit = rules.websites.limitSeconds(for: host, on: now),
+              usage >= limit, !isOverridden("web") else { return nil }
         return .siteLimit(used: usage, limit: limit)
     }
 }

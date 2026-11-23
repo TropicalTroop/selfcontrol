@@ -315,7 +315,7 @@ final class Store {
         let strict = isStrict
         if let until = helper.status?.websiteBlocks[visit.domain], until > now {
             // Already blocked by the helper (an accepted website-limit block).
-            return .siteLimit(used: webUsage(for: visit.domain), limit: effectiveRules.websites.limitSeconds ?? 0)
+            return .siteLimit(used: webUsage(for: visit.domain), limit: effectiveRules.websites.limitSeconds(for: visit.host, on: now) ?? 0)
         }
         return Enforcement.siteReason(host: visit.host, at: now, focus: activeFocus, rules: effectiveRules,
                                       usage: webUsage(for: visit.domain, on: now), exemptionsAllowed: !strict,
@@ -365,6 +365,24 @@ final class Store {
         var proposed = localRules
         proposed.limits.removeAll { $0.id == (old?.id ?? new?.id) }
         if let new { proposed.limits.append(new) }
+        return Rules.loosenings(from: locked, to: proposed)
+    }
+
+    /// A new site limit, starting no higher than the limit every other site gets.
+    func newSiteLimit(domain: String) -> SiteLimit {
+        var limit = SiteLimit(domain: domain)
+        if config.websites.limitAllSites {
+            limit.dailyMinutes = min(limit.dailyMinutes, config.websites.minutesPerSite)
+            limit.perDayMinutes = Array(repeating: limit.dailyMinutes, count: 7)
+        }
+        return limit
+    }
+
+    func strictProblems(replacingSite old: SiteLimit?, with new: SiteLimit?) -> [String] {
+        guard isStrict, let locked = helper.status?.rules else { return [] }
+        var proposed = localRules
+        proposed.websites.siteLimits.removeAll { $0.id == (old?.id ?? new?.id) }
+        if let new { proposed.websites.siteLimits.append(new) }
         return Rules.loosenings(from: locked, to: proposed)
     }
 

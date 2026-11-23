@@ -51,27 +51,31 @@ struct AppRef: Codable, Hashable, Identifiable {
     var id: String { bundleID }
 }
 
-// MARK: - App limits
+// MARK: - Daily allowances (shared by app and website limits)
 
-struct AppLimit: Codable, Hashable, Identifiable {
-    var app: AppRef
-    var enabled = true
+/// A daily time allowance, either the same every day or set per weekday.
+protocol DailyAllowance {
+    var enabled: Bool { get set }
     /// Limit used when `customDays` is false.
-    var dailyMinutes = 60
-    var customDays = false
+    var dailyMinutes: Int { get set }
+    var customDays: Bool { get set }
     /// Indexed by weekday - 1.
-    var perDayMinutes: [Int] = Array(repeating: 60, count: 7)
+    var perDayMinutes: [Int] { get set }
     /// Indexed by weekday - 1. A disabled day has no limit.
-    var perDayEnabled: [Bool] = Array(repeating: true, count: 7)
+    var perDayEnabled: [Bool] { get set }
+}
 
-    var id: String { app.bundleID }
+extension DailyAllowance {
+    /// Minutes allowed on a weekday, or nil if there's no limit that day.
+    func minutes(forWeekday weekday: Int) -> Int? {
+        guard enabled else { return nil }
+        if !customDays { return dailyMinutes }
+        return perDayEnabled[weekday - 1] ? perDayMinutes[weekday - 1] : nil
+    }
 
     /// Limit in seconds for the given date, or nil if there is no limit that day.
     func limitSeconds(on date: Date) -> TimeInterval? {
-        guard enabled else { return nil }
-        if !customDays { return TimeInterval(dailyMinutes * 60) }
-        let i = Weekdays.weekday(of: date) - 1
-        return perDayEnabled[i] ? TimeInterval(perDayMinutes[i] * 60) : nil
+        minutes(forWeekday: Weekdays.weekday(of: date)).map { TimeInterval($0 * 60) }
     }
 
     var summary: String {
@@ -84,6 +88,19 @@ struct AppLimit: Codable, Hashable, Identifiable {
         }
         return "Custom limits by day"
     }
+}
+
+// MARK: - App limits
+
+struct AppLimit: Codable, Hashable, Identifiable, DailyAllowance {
+    var app: AppRef
+    var enabled = true
+    var dailyMinutes = 60
+    var customDays = false
+    var perDayMinutes: [Int] = Array(repeating: 60, count: 7)
+    var perDayEnabled: [Bool] = Array(repeating: true, count: 7)
+
+    var id: String { app.bundleID }
 }
 
 // MARK: - Downtime
@@ -169,9 +186,26 @@ struct DowntimeSchedule: Codable, Hashable {
 
 // MARK: - Website limits
 
+/// A daily limit for one website (and its subdomains), used instead of the limit for every site.
+struct SiteLimit: Codable, Hashable, Identifiable, DailyAllowance {
+    /// A registrable domain like "youtube.com", matching how website time is recorded.
+    var domain: String
+    var enabled = true
+    var dailyMinutes = 30
+    var customDays = false
+    var perDayMinutes: [Int] = Array(repeating: 30, count: 7)
+    var perDayEnabled: [Bool] = Array(repeating: true, count: 7)
+
+    var id: String { domain }
+}
+
 struct WebsiteLimits: Codable, Hashable {
     var enabled = true
+    /// Whether sites without their own limit get `minutesPerSite`.
+    var limitAllSites = true
     var minutesPerSite = 60
+    /// Limits for specific sites. These replace `minutesPerSite` for those sites.
+    var siteLimits: [SiteLimit] = []
     /// Sites (and their subdomains) that are never limited or counted.
     var whitelist: [String] = []
 
@@ -179,7 +213,25 @@ struct WebsiteLimits: Codable, Hashable {
         whitelist.contains { Domains.matches(host, $0) }
     }
 
-    var limitSeconds: TimeInterval? { enabled ? TimeInterval(minutesPerSite * 60) : nil }
+    /// The enabled site limit covering `host`; the most specific one if several match.
+    func siteLimit(for host: String) -> SiteLimit? {
+        siteLimits.filter { $0.enabled && Domains.matches(host, $0.domain) }
+            .max { $0.domain.count < $1.domain.count }
+    }
+
+    /// Minutes allowed on `host` on a weekday, or nil if it has no limit that day. Ignores the whitelist.
+    /// Pass nil for "any site without its own limit".
+    func minutes(forSite host: String?, weekday: Int) -> Int? {
+        guard enabled else { return nil }
+        if let host, let limit = siteLimit(for: host) { return limit.minutes(forWeekday: weekday) }
+        return limitAllSites ? minutesPerSite : nil
+    }
+
+    /// Limit in seconds for `host` on `date`, or nil if it isn't limited then.
+    func limitSeconds(for host: String, on date: Date = Date()) -> TimeInterval? {
+        guard !isWhitelisted(host: host) else { return nil }
+        return minutes(forSite: host, weekday: Weekdays.weekday(of: date)).map { TimeInterval($0 * 60) }
+    }
 }
 
 // MARK: - Focus lists (the Gallery)
@@ -413,6 +465,18 @@ extension DowntimeSchedule {
         blockAtDowntime = c.value(.blockAtDowntime, d.blockAtDowntime)
         alwaysAllowed = c.value(.alwaysAllowed, d.alwaysAllowed)
         blockedWebsites = c.value(.blockedWebsites, d.blockedWebsites)
+    }
+}
+
+extension WebsiteLimits {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = WebsiteLimits()
+        enabled = c.value(.enabled, d.enabled)
+        limitAllSites = c.value(.limitAllSites, d.limitAllSites)
+        minutesPerSite = c.value(.minutesPerSite, d.minutesPerSite)
+        siteLimits = c.value(.siteLimits, d.siteLimits)
+        whitelist = c.value(.whitelist, d.whitelist)
     }
 }
 
