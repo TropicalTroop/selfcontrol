@@ -175,7 +175,7 @@ private struct DelayPromptView: View {
             "You've spent \(formatDuration(limit)) on \(target.name) today. SelfControl is about to block it until midnight."
         case .downtime(let until):
             "Downtime has started, so \(target.name) is about to be blocked until \(until.formatted(date: .omitted, time: .shortened))."
-        case .focus:
+        case .focus, .profile:
             "\(target.name) is about to be blocked."
         }
     }

@@ -308,6 +308,7 @@ final class Store {
         let strict = isStrict
         return Enforcement.reason(bundleID: bundleID, at: now, focus: activeFocus, rules: effectiveRules,
                                   usage: usage(for: bundleID, on: now), exemptionsAllowed: !strict,
+                                  profile: activeProfile,
                                   isOverridden: { strict ? false : self.isOverridden($0, bundleID, at: now) })
     }
 
@@ -319,6 +320,7 @@ final class Store {
         }
         return Enforcement.siteReason(host: visit.host, at: now, focus: activeFocus, rules: effectiveRules,
                                       usage: webUsage(for: visit.domain, on: now), exemptionsAllowed: !strict,
+                                      profile: activeProfile,
                                       isOverridden: { strict ? false : self.isOverridden($0, visit.domain, at: now) })
     }
 
@@ -332,7 +334,7 @@ final class Store {
     func allowsDelay(_ reason: BlockReason) -> Bool {
         if isStrict { return false }
         switch reason {
-        case .focus: return false
+        case .focus, .profile: return false
         case .downtime: return !effectiveRules.downtime.blockAtDowntime
         case .limit, .siteLimit: return true
         }
@@ -408,6 +410,27 @@ final class Store {
             }
             state.focus = session
         }
+        saveState()
+    }
+
+    // MARK: Profiles
+
+    /// The profile that's switched on, if any. Profiles have no timer: they stay on until switched off.
+    var activeProfile: FocusList? {
+        guard let id = state.activeProfileID else { return nil }
+        return config.profiles.first { $0.id == id }
+    }
+
+    /// Switches on a profile, replacing whichever one was on.
+    func activateProfile(_ profile: FocusList) {
+        state.activeProfileID = profile.id
+        state.profileActivatedAt = Date()
+        saveState()
+    }
+
+    func deactivateProfile() {
+        state.activeProfileID = nil
+        state.profileActivatedAt = nil
         saveState()
     }
 

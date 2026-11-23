@@ -137,8 +137,9 @@ extension DowntimeSchedule {
 enum Enforcement {
     /// Why an app should be blocked right now, or nil.
     /// `exemptionsAllowed` is false in Strict Mode, so a focus list can't be used to skip locked limits.
+    /// `profile` is the profile that's switched on (only the app enforces profiles, not the helper).
     static func reason(bundleID: String, at now: Date, focus: FocusSession?, rules: Rules?,
-                       usage: TimeInterval, exemptionsAllowed: Bool = true,
+                       usage: TimeInterval, exemptionsAllowed: Bool = true, profile: FocusList? = nil,
                        isOverridden: (String) -> Bool = { _ in false }) -> BlockReason? {
         if Constants.essentialBundleIDs.contains(bundleID) { return nil }
 
@@ -147,6 +148,10 @@ enum Enforcement {
             if focus.apps.contains(where: { $0.bundleID == bundleID }) { return .focus(until: focus.end) }
             if focus.mode == .allowlist && !focus.allowsApp(bundleID) { return .focus(until: focus.end) }
             exempt = exemptionsAllowed && focus.allowsApp(bundleID)
+        }
+        if let profile {
+            if profile.blocksApp(bundleID) { return .profile(name: profile.name) }
+            exempt = exempt || (exemptionsAllowed && profile.allowsApp(bundleID))
         }
         guard let rules else { return nil }
 
@@ -166,13 +171,17 @@ enum Enforcement {
     /// Why a website (given as the visited host) should be blocked right now, or nil.
     /// `usage` is today's time on the host's registrable domain.
     static func siteReason(host: String, at now: Date, focus: FocusSession?, rules: Rules?,
-                           usage: TimeInterval, exemptionsAllowed: Bool = true,
+                           usage: TimeInterval, exemptionsAllowed: Bool = true, profile: FocusList? = nil,
                            isOverridden: (String) -> Bool = { _ in false }) -> BlockReason? {
         var exempt = false
         if let focus, focus.end > now {
             if focus.blocksSite(host) { return .focus(until: focus.end) }
             if focus.mode == .allowlist && !focus.allowsSite(host) { return .focus(until: focus.end) }
             exempt = exemptionsAllowed && focus.allowsSite(host)
+        }
+        if let profile {
+            if profile.blocksSite(host) { return .profile(name: profile.name) }
+            exempt = exempt || (exemptionsAllowed && profile.allowsSite(host))
         }
         guard let rules, !exempt, let limit = rules.websites.limitSeconds(for: host, on: now),
               usage >= limit, !isOverridden("web") else { return nil }

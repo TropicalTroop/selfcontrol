@@ -15,6 +15,8 @@ final class Monitor: NSObject, UNUserNotificationCenterDelegate {
     private var lastFlush = Date()
     private var lastDowntimeCheck = Date.distantPast
     private var hadFocus = false
+    /// The profile (and its contents) last swept, so turning one on or editing it closes blocked apps.
+    private var sweptProfile: FocusList?
     private var screenLocked = false
     private var asleep = false
     private var displayAsleep = false
@@ -87,6 +89,12 @@ final class Monitor: NSObject, UNUserNotificationCenterDelegate {
             notify(id: "focus-done", title: "Focus session complete", body: "Your blocked apps and websites are available again.")
         }
         hadFocus = focusActive
+
+        let profile = store.activeProfile
+        if profile != sweptProfile {
+            sweptProfile = profile
+            if profile != nil { sweepBlockedApps() }
+        }
 
         if now.timeIntervalSince(lastHeartbeat) >= 5 {
             lastHeartbeat = now
@@ -212,6 +220,22 @@ final class Monitor: NSObject, UNUserNotificationCenterDelegate {
             return
         }
         block(app, ref: ref, reason: reason)
+    }
+
+    /// Closes (or hides) apps a profile blocks that are open in the background. The frontmost app
+    /// goes through the normal path, with the shield explaining why.
+    private func sweepBlockedApps() {
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != front {
+            guard let id = app.bundleIdentifier, case .profile = store.blockReason(for: id) else { continue }
+            switch store.config.settings.blockAction {
+            case .quit:
+                quitRequests[app.processIdentifier] = Date()
+                if !app.terminate() { app.hide() }
+            case .hide:
+                app.hide()
+            }
+        }
     }
 
     private func block(_ app: NSRunningApplication, ref: AppRef, reason: BlockReason) {

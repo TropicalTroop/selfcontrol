@@ -263,20 +263,28 @@ struct FocusListEditor: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     let original: FocusList?
+    /// Profiles are edited with the same editor, but are stored separately and enforced only by the app.
+    var isProfile = false
     @State private var draft: FocusList
     @State private var confirmDelete = false
 
-    init(original: FocusList?) {
+    init(original: FocusList?, isProfile: Bool = false) {
         self.original = original
+        self.isProfile = isProfile
         _draft = State(initialValue: original ?? FocusList(name: ""))
     }
+
+    private var lists: Binding<[FocusList]> {
+        isProfile ? Bindable(store).config.profiles : Bindable(store).config.focusLists
+    }
+    private var noun: String { isProfile ? "Profile" : "List" }
 
     var body: some View {
         let tint = ListStyle.color(draft.color)
         VStack(spacing: 0) {
             HStack(spacing: 14) {
                 SymbolBadge(symbol: draft.symbol, tint: tint, size: 52)
-                TextField("List Name", text: $draft.name, prompt: Text("Name, e.g. Study"))
+                TextField("\(noun) Name", text: $draft.name, prompt: Text(isProfile ? "Name, e.g. Work" : "Name, e.g. Study"))
                     .textFieldStyle(.plain)
                     .font(.title2.weight(.semibold))
             }
@@ -307,17 +315,14 @@ struct FocusListEditor: View {
                 }
 
                 Section {
-                    Picker("During a session", selection: $draft.mode) {
+                    Picker(isProfile ? "While it's on" : "During a session", selection: $draft.mode) {
                         ForEach(FocusMode.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.radioGroup)
                 } header: {
                     Text("Mode")
                 } footer: {
-                    Text(draft.mode == .exempt
-                         ? "Blocked items are blocked. Allowed items stay usable even past their app or website limits. Everything else follows your usual rules."
-                         : "Only allowed apps and websites work. Every other app is blocked, and network access is cut for everything except the allowed sites (and what they need to load).")
-                        .foregroundStyle(.secondary)
+                    Text(modeFooter).foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -339,7 +344,9 @@ struct FocusListEditor: View {
                     Label("Allow", systemImage: "checkmark.circle")
                 } footer: {
                     if draft.mode == .allowlist {
-                        Text("Apps that need the internet (e.g. Discord) also need their websites allowed here.")
+                        Text(isProfile
+                             ? "If you allow any websites, browsers SelfControl can read (Safari, Chrome, Edge, Brave, Arc…) stay open, and tabs on other sites are cleared."
+                             : "Apps that need the internet (e.g. Discord) also need their websites allowed here.")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -349,7 +356,7 @@ struct FocusListEditor: View {
 
             HStack {
                 if original != nil {
-                    Button("Delete List", role: .destructive) { confirmDelete = true }
+                    Button("Delete \(noun)", role: .destructive) { confirmDelete = true }
                 }
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -362,8 +369,9 @@ struct FocusListEditor: View {
         }
         .frame(width: 600, height: 620)
         .confirmationDialog("Delete \(draft.name)?", isPresented: $confirmDelete) {
-            Button("Delete List", role: .destructive) {
-                store.config.focusLists.removeAll { $0.id == original?.id }
+            Button("Delete \(noun)", role: .destructive) {
+                lists.wrappedValue.removeAll { $0.id == original?.id }
+                if isProfile, store.state.activeProfileID == original?.id { store.deactivateProfile() }
                 dismiss()
             }
         }
@@ -371,11 +379,22 @@ struct FocusListEditor: View {
 
     private func save() {
         draft.name = draft.name.trimmingCharacters(in: .whitespaces)
-        if let i = store.config.focusLists.firstIndex(where: { $0.id == draft.id }) {
-            store.config.focusLists[i] = draft
+        if let i = lists.wrappedValue.firstIndex(where: { $0.id == draft.id }) {
+            lists.wrappedValue[i] = draft
         } else {
-            store.config.focusLists.append(draft)
+            lists.wrappedValue.append(draft)
         }
         dismiss()
+    }
+
+    private var modeFooter: String {
+        switch (draft.mode, isProfile) {
+        case (.exempt, _):
+            "Blocked items are blocked. Allowed items stay usable even past their app or website limits. Everything else follows your usual rules."
+        case (.allowlist, false):
+            "Only allowed apps and websites work. Every other app is blocked, and network access is cut for everything except the allowed sites (and what they need to load)."
+        case (.allowlist, true):
+            "Only allowed apps and websites work. Every other app is closed, and browser tabs on any other site are cleared."
+        }
     }
 }

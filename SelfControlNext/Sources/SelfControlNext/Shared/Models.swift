@@ -269,6 +269,29 @@ struct FocusList: Codable, Hashable, Identifiable {
     var allowedWebsites: [String] = []
 }
 
+extension FocusList {
+    // Used when the list is a profile. (A Focus Session copies the list into a FocusSession instead.)
+
+    func allowsApp(_ bundleID: String) -> Bool {
+        if allowedApps.contains(where: { $0.bundleID == bundleID }) { return true }
+        // "Allow only" with websites allowed needs a browser to reach them; tabs on other sites are
+        // still blocked, so every browser SelfControl can read is allowed.
+        return mode == .allowlist && !allowedWebsites.isEmpty && BrowserTracker.supported[bundleID] != nil
+    }
+
+    func blocksApp(_ bundleID: String) -> Bool {
+        if blockedApps.contains(where: { $0.bundleID == bundleID }) { return true }
+        return mode == .allowlist && !allowsApp(bundleID)
+    }
+
+    func allowsSite(_ host: String) -> Bool { allowedWebsites.contains { Domains.matches(host, $0) } }
+
+    func blocksSite(_ host: String) -> Bool {
+        if blockedWebsites.contains(where: { Domains.matches(host, $0) }) { return true }
+        return mode == .allowlist && !allowsSite(host)
+    }
+}
+
 // MARK: - Focus session (the classic SelfControl block, for apps and websites)
 
 struct FocusSession: Codable, Hashable {
@@ -349,6 +372,8 @@ struct Config: Codable {
     var settings = AppSettings()
     var websites = WebsiteLimits()
     var focusLists: [FocusList] = []
+    /// Profiles: lists you switch on and off by hand, with no timer.
+    var profiles: [FocusList] = []
 }
 
 struct UsageState: Codable {
@@ -361,10 +386,15 @@ struct UsageState: Codable {
     var overrides: [String: Date] = [:]
     var focus: FocusSession?
     var warned: [String] = []
+    /// The profile that's switched on, if any.
+    var activeProfileID: UUID?
+    var profileActivatedAt: Date?
 }
 
 enum BlockReason: Equatable {
     case focus(until: Date)
+    /// Blocked by a profile that's switched on.
+    case profile(name: String)
     case downtime(until: Date)
     case limit(used: TimeInterval, limit: TimeInterval)
     case siteLimit(used: TimeInterval, limit: TimeInterval)
@@ -372,7 +402,7 @@ enum BlockReason: Equatable {
     /// Key prefix for delays and accepted blocks; nil if the block can't be delayed.
     var overrideKind: String? {
         switch self {
-        case .focus: nil
+        case .focus, .profile: nil
         case .downtime: "downtime"
         case .limit: "limit"
         case .siteLimit: "web"
@@ -425,6 +455,7 @@ extension Config {
         settings = c.value(.settings, d.settings)
         websites = c.value(.websites, d.websites)
         focusLists = c.value(.focusLists, d.focusLists)
+        profiles = c.value(.profiles, d.profiles)
     }
 }
 
@@ -437,6 +468,8 @@ extension UsageState {
         overrides = c.value(.overrides, [:])
         focus = c.value(.focus, nil)
         warned = c.value(.warned, [])
+        activeProfileID = c.value(.activeProfileID, nil)
+        profileActivatedAt = c.value(.profileActivatedAt, nil)
     }
 }
 

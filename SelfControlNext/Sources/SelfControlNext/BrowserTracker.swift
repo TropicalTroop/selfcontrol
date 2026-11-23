@@ -8,7 +8,7 @@ final class BrowserTracker {
     enum Family { case safari, chromium }
 
     /// Browsers whose tab URLs can be read. Firefox-based browsers don't support this.
-    static let supported: [String: (name: String, family: Family)] = [
+    nonisolated static let supported: [String: (name: String, family: Family)] = [
         "com.apple.Safari": ("Safari", .safari),
         "com.apple.SafariTechnologyPreview": ("Safari Technology Preview", .safari),
         "com.google.Chrome": ("Google Chrome", .chromium),

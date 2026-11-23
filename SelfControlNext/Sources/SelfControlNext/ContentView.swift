@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case overview, limits, websiteLimits, whitelist, downtime, focus, gallery, settings
+    case overview, limits, websiteLimits, whitelist, downtime, focus, profiles, gallery, settings
     var id: String { rawValue }
 
     var title: String {
@@ -13,6 +13,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .gallery: "Gallery"
         case .downtime: "Downtime"
         case .focus: "Focus Session"
+        case .profiles: "Profiles"
         case .settings: "Settings"
         }
     }
@@ -26,6 +27,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .gallery: "square.grid.2x2.fill"
         case .downtime: "moon.fill"
         case .focus: "lock.fill"
+        case .profiles: "person.crop.rectangle.stack.fill"
         case .settings: "gearshape.fill"
         }
     }
@@ -39,6 +41,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .gallery: .purple
         case .downtime: .indigo
         case .focus: .red
+        case .profiles: .mint
         case .settings: .gray
         }
     }
@@ -63,7 +66,7 @@ struct ContentView: View {
                     ForEach([SidebarItem.overview]) { row($0) }
                 }
                 Section("Controls") {
-                    ForEach([SidebarItem.limits, .websiteLimits, .whitelist, .downtime, .focus, .gallery]) { row($0) }
+                    ForEach([SidebarItem.limits, .websiteLimits, .whitelist, .downtime, .focus, .profiles, .gallery]) { row($0) }
                 }
                 Section {
                     row(.settings)
@@ -81,6 +84,7 @@ struct ContentView: View {
                 case .gallery: GalleryView(select: { selection = $0 })
                 case .downtime: DowntimeView()
                 case .focus: FocusView(select: { selection = $0 })
+                case .profiles: ProfilesView()
                 case .settings: SettingsView()
                 }
             }
@@ -111,6 +115,9 @@ private struct StatusFooter: View {
                 if let focus = store.activeFocus {
                     StatusPill(symbol: "lock.fill", tint: .red,
                                text: "Focus · \(formatDuration(focus.remaining(), style: .clock)) left")
+                }
+                if let profile = store.activeProfile {
+                    StatusPill(symbol: "person.crop.rectangle.stack.fill", tint: .mint, text: "\(profile.name) profile on")
                 }
                 if let downtime = store.activeDowntime {
                     StatusPill(symbol: "moon.fill", tint: .indigo,

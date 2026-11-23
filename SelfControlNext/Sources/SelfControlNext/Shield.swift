@@ -106,6 +106,7 @@ private struct ShieldView: View {
     private var title: String {
         switch reason {
         case .focus: "Focus Session"
+        case .profile(let name): "\(name) Profile"
         case .downtime: "Downtime"
         case .limit, .siteLimit: "Time Limit Reached"
         }
@@ -115,6 +116,8 @@ private struct ShieldView: View {
         switch reason {
         case .focus(let until):
             "\(target.name) is blocked for your focus session. It will be available again at \(until.formatted(date: .omitted, time: .shortened))."
+        case .profile(let name):
+            "\(target.name) is blocked while the \(name) profile is on. Switch the profile off in SelfControl to use it."
         case .downtime(let until):
             "\(target.name) isn't available during Downtime. Downtime ends at \(until.formatted(date: .omitted, time: .shortened))."
         case .limit(_, let limit):
@@ -127,6 +130,7 @@ private struct ShieldView: View {
     private var symbol: String {
         switch reason {
         case .focus: "lock.fill"
+        case .profile: "person.crop.rectangle.stack.fill"
         case .downtime: "moon.fill"
         case .limit, .siteLimit: "hourglass"
         }
@@ -135,6 +139,7 @@ private struct ShieldView: View {
     private var tint: Color {
         switch reason {
         case .focus: .red
+        case .profile: .mint
         case .downtime: .indigo
         case .limit, .siteLimit: .orange
         }

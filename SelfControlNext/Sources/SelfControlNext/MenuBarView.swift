@@ -25,6 +25,20 @@ struct MenuBarView: View {
                     StatusPill(symbol: "lock.fill", tint: .red,
                                text: "Focus session · \(formatDuration(focus.remaining(), style: .clock)) left")
                 }
+                if !store.config.profiles.isEmpty {
+                    Picker(selection: Binding(
+                        get: { store.activeProfile?.id },
+                        set: { id in
+                            if let p = store.config.profiles.first(where: { $0.id == id }) { store.activateProfile(p) }
+                            else { store.deactivateProfile() }
+                        }
+                    )) {
+                        Text("Off").tag(UUID?.none)
+                        ForEach(store.config.profiles) { Text($0.name).tag(UUID?.some($0.id)) }
+                    } label: {
+                        Label("Profile", systemImage: "person.crop.rectangle.stack.fill")
+                    }
+                }
                 if let downtime = store.activeDowntime {
                     StatusPill(symbol: "moon.fill", tint: .indigo,
                                text: "Downtime until \(downtime.end.formatted(date: .omitted, time: .shortened))")
