@@ -41,10 +41,12 @@ final class BrowserTracker {
     @ObservationIgnored private var inFlight = false
     @ObservationIgnored private var lastPoll = Date.distantPast
 
-    /// Called every tick with the frontmost app. Polls at most every 2 seconds.
+    /// Called every tick with the frontmost app. Reads the tab at most every 2 seconds.
     func update(frontmost app: NSRunningApplication?) {
         guard let id = app?.bundleIdentifier, let browser = Self.supported[id] else {
-            if let id = app?.bundleIdentifier, Self.unsupported[id] != nil { unsupportedInUse.insert(id) }
+            if let id = app?.bundleIdentifier, Self.unsupported[id] != nil, !unsupportedInUse.contains(id) {
+                unsupportedInUse.insert(id)
+            }
             if current != nil { current = nil }
             return
         }
@@ -53,35 +55,39 @@ final class BrowserTracker {
         inFlight = true
         lastPoll = Date()
 
-        let tab = browser.family == .safari ? "current tab" : "active tab"
-        let script = "tell application id \"\(id)\" to if (count of windows) > 0 then get URL of \(tab) of front window"
-        Task {
-            let result = await Self.runAppleScript(script)
-            inFlight = false
-            switch result {
-            case .success(let url):
-                workingBrowsers.insert(id)
-                deniedBrowsers.remove(id)
-                if let host = Domains.host(ofURL: url), let domain = Domains.registrableDomain(host) {
-                    let visit = Visit(browserID: id, host: host, domain: domain)
-                    if current != visit { current = visit }
-                } else if current != nil {
-                    current = nil
-                }
-            case .failure(let error):
-                if error.isPermissionDenied { deniedBrowsers.insert(id) }
-                if current != nil { current = nil }
+        let family = browser.family
+        Self.queue.async {
+            let result = AppleEvents.activeTabURL(browserID: id, family: family)
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.handle(result, browserID: id) } }
+        }
+    }
+
+    private func handle(_ result: Result<String?, AppleEvents.Failure>, browserID id: String) {
+        inFlight = false
+        switch result {
+        case .success(let url):
+            if !workingBrowsers.contains(id) { workingBrowsers.insert(id) }
+            if deniedBrowsers.contains(id) { deniedBrowsers.remove(id) }
+            if let url, let host = Domains.host(ofURL: url), let domain = Domains.registrableDomain(host) {
+                let visit = Visit(browserID: id, host: host, domain: domain)
+                if current != visit { current = visit }
+            } else if current != nil {
+                current = nil
             }
+        case .failure(let failure):
+            if failure == .denied, !deniedBrowsers.contains(id) { deniedBrowsers.insert(id) }
+            if current != nil { current = nil }
         }
     }
 
     /// Points the frontmost browser's active tab at a blank page, so a blocked site stops right away.
     func blankActiveTab(browserID: String) {
-        guard let browser = Self.supported[browserID] else { return }
-        let tab = browser.family == .safari ? "current tab" : "active tab"
-        let script = "tell application id \"\(browserID)\" to if (count of windows) > 0 then set URL of \(tab) of front window to \"about:blank\""
-        Task { _ = await Self.runAppleScript(script) }
+        guard let family = Self.supported[browserID]?.family else { return }
+        Self.queue.async { AppleEvents.setActiveTabURL(browserID: browserID, family: family, to: "about:blank") }
     }
+
+    /// One serial queue for all Apple Events, so a slow browser never blocks the main thread.
+    nonisolated private static let queue = DispatchQueue(label: "browser-tracker", qos: .utility)
 
     /// Opens System Settings at Privacy & Security → Automation.
     static func openAutomationSettings() {
@@ -89,36 +95,79 @@ final class BrowserTracker {
             NSWorkspace.shared.open(url)
         }
     }
+}
 
-    struct ScriptError: Error {
-        var message: String
-        /// errAEEventNotPermitted: the user declined (or hasn't granted) Automation access.
-        var isPermissionDenied: Bool { message.contains("-1743") }
+/// Reads and sets a browser's active-tab URL by sending Apple Events directly. This is the same
+/// thing `tell application … to get URL of active tab of front window` does, without starting an
+/// osascript process each time (about 1 ms instead of about 80 ms of CPU).
+enum AppleEvents {
+    enum Failure: Error, Equatable {
+        /// errAEEventNotPermitted (-1743): the user declined Automation access.
+        case denied
+        case other(Int)
     }
 
-    /// Runs AppleScript through osascript off the main thread, with a 2-second timeout so a
-    /// hung browser can't stall SelfControl.
-    nonisolated static func runAppleScript(_ source: String) async -> Result<String, ScriptError> {
-        await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", source]
-            let out = Pipe(), err = Pipe()
-            process.standardOutput = out
-            process.standardError = err
-            do { try process.run() } catch { return .failure(ScriptError(message: error.localizedDescription)) }
-            let deadline = Date().addingTimeInterval(2)
-            while process.isRunning && Date() < deadline { usleep(20_000) }
-            if process.isRunning {
-                process.terminate()
-                return .failure(ScriptError(message: "timed out"))
+    private static func code(_ s: String) -> FourCharCode {
+        s.utf8.reduce(0) { $0 << 8 | FourCharCode($1) }
+    }
+
+    /// An object specifier, like AppleScript's "<property> of <container>".
+    private static func specifier(want: String, form: String, data: NSAppleEventDescriptor,
+                                  from container: NSAppleEventDescriptor) -> NSAppleEventDescriptor {
+        let spec = NSAppleEventDescriptor.record().coerce(toDescriptorType: code("obj "))!
+        spec.setDescriptor(NSAppleEventDescriptor(typeCode: code(want)), forKeyword: code("want"))
+        spec.setDescriptor(NSAppleEventDescriptor(enumCode: code(form)), forKeyword: code("form"))
+        spec.setDescriptor(data, forKeyword: code("seld"))
+        spec.setDescriptor(container, forKeyword: code("from"))
+        return spec
+    }
+
+    /// "URL of <active|current> tab of window 1". Codes come from each browser's scripting dictionary.
+    private static func urlSpecifier(_ family: BrowserTracker.Family) -> NSAppleEventDescriptor {
+        let (tabProperty, urlProperty) = family == .safari ? ("cTab", "pURL") : ("acTa", "URL ")
+        let window = specifier(want: "cwin", form: "indx", data: NSAppleEventDescriptor(int32: 1), from: .null())
+        let tab = specifier(want: "prop", form: "prop", data: NSAppleEventDescriptor(typeCode: code(tabProperty)), from: window)
+        return specifier(want: "prop", form: "prop", data: NSAppleEventDescriptor(typeCode: code(urlProperty)), from: tab)
+    }
+
+    private static func event(_ eventClass: String, _ eventID: String, to browserID: String) -> NSAppleEventDescriptor {
+        NSAppleEventDescriptor(eventClass: code(eventClass), eventID: code(eventID),
+                               targetDescriptor: NSAppleEventDescriptor(bundleIdentifier: browserID),
+                               returnID: AEReturnID(kAutoGenerateReturnID),
+                               transactionID: AETransactionID(kAnyTransactionID))
+    }
+
+    private static func send(_ event: NSAppleEventDescriptor) -> Result<NSAppleEventDescriptor, Failure> {
+        do {
+            let reply = try event.sendEvent(options: [.waitForReply], timeout: 2)
+            if let errn = reply.paramDescriptor(forKeyword: code("errn"))?.int32Value, errn != 0 {
+                return .failure(errn == -1743 ? .denied : .other(Int(errn)))
             }
-            let output = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            if process.terminationStatus != 0 {
-                let message = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                return .failure(ScriptError(message: message))
-            }
-            return .success(output.trimmingCharacters(in: .whitespacesAndNewlines))
-        }.value
+            return .success(reply)
+        } catch {
+            let status = (error as NSError).code
+            return .failure(status == -1743 ? .denied : .other(status))
+        }
+    }
+
+    /// The active tab's URL, nil if the browser has no windows, or a failure (e.g. not permitted).
+    static func activeTabURL(browserID: String, family: BrowserTracker.Family) -> Result<String?, Failure> {
+        let e = event("core", "getd", to: browserID)
+        e.setParam(urlSpecifier(family), forKeyword: code("----"))
+        switch send(e) {
+        case .success(let reply):
+            return .success(reply.paramDescriptor(forKeyword: code("----"))?.stringValue)
+        case .failure(.other(-1719)), .failure(.other(-1728)):
+            return .success(nil)   // no such window/tab: nothing open
+        case .failure(let f):
+            return .failure(f)
+        }
+    }
+
+    static func setActiveTabURL(browserID: String, family: BrowserTracker.Family, to url: String) {
+        let e = event("core", "setd", to: browserID)
+        e.setParam(urlSpecifier(family), forKeyword: code("----"))
+        e.setParam(NSAppleEventDescriptor(string: url), forKeyword: code("data"))
+        _ = send(e)
     }
 }

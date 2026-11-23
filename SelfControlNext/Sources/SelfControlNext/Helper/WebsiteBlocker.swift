@@ -110,13 +110,13 @@ enum WebsiteBlocker {
     }
 
     /// True if the hosts entries and pf anchor are still in place (nobody edited them out).
-    static func isIntact(domains: [String]) -> Bool {
+    static func isIntact(domains: [String], checkPF: Bool = true) -> Bool {
         guard let hosts = try? String(contentsOfFile: hostsPath, encoding: .utf8),
               hosts.contains(hostsSection(for: domains)) else { return false }
         guard let conf = try? String(contentsOfFile: pfConfPath, encoding: .utf8), conf.contains(anchorName),
               let anchor = try? String(contentsOfFile: anchorPath, encoding: .utf8), anchor == lastAnchorRules
         else { return false }
-        if isTesting { return true }
+        if isTesting || !checkPF { return true }
         return shell("/sbin/pfctl", ["-s", "info"]).contains("Status: Enabled")
     }
 

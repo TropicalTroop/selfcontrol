@@ -12,6 +12,8 @@ final class Monitor: NSObject, UNUserNotificationCenterDelegate {
     private var lastTick = Date()
     private var lastSave = Date()
     private var lastHeartbeat = Date.distantPast
+    private var lastFlush = Date()
+    private var lastDowntimeCheck = Date.distantPast
     private var hadFocus = false
     private var screenLocked = false
     private var asleep = false
@@ -63,6 +65,7 @@ final class Monitor: NSObject, UNUserNotificationCenterDelegate {
         let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        t.tolerance = 0.25   // lets macOS coalesce wakeups with other timers (saves energy)
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
@@ -99,7 +102,14 @@ final class Monitor: NSObject, UNUserNotificationCenterDelegate {
             warnAboutLimit(bundleID: id, name: front.localizedName ?? id)
         }
         trackWebsite(front: NSWorkspace.shared.frontmostApplication, delta: delta, now: now)
-        warnAboutDowntime(now: now)
+        if now.timeIntervalSince(lastDowntimeCheck) >= 15 {
+            lastDowntimeCheck = now
+            warnAboutDowntime(now: now)
+        }
+        if now.timeIntervalSince(lastFlush) >= 10 {
+            lastFlush = now
+            store.flushUsage()
+        }
 
         quitRequests = quitRequests.filter { now.timeIntervalSince($0.value) < 30 }
         if now.timeIntervalSince(lastSave) > 30 {

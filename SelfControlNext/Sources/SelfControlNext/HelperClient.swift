@@ -11,6 +11,10 @@ final class HelperClient {
     private(set) var status: HelperStatus?
     private(set) var health: Health = .connecting
     private(set) var isBusy = false
+    /// Today's usage as the helper records it. Kept out of `status` (and unobserved) because it
+    /// changes on every heartbeat, which would otherwise redraw every view that reads `status`.
+    @ObservationIgnored private(set) var usageToday: [String: Double] = [:]
+    @ObservationIgnored private(set) var webUsageToday: [String: Double] = [:]
 
     @ObservationIgnored private var connection: NSXPCConnection?
 
@@ -23,7 +27,7 @@ final class HelperClient {
     @discardableResult
     func send(_ request: HelperRequest) async throws -> HelperResponse {
         guard isInstalled else {
-            health = .notInstalled
+            setHealth(.notInstalled)
             throw HelperError.message("The SelfControl helper isn't installed.")
         }
         let data = JSON.encode(request)
@@ -40,22 +44,36 @@ final class HelperClient {
                 }
             }
             let response = try JSON.decode(HelperResponse.self, replyData)
-            status = response.status
-            health = response.status.version == Constants.helperVersion ? .running : .outdated
+            var newStatus = response.status
+            usageToday = newStatus.usageToday
+            webUsageToday = newStatus.webUsageToday
+            newStatus.usageToday = [:]
+            newStatus.webUsageToday = [:]
+            // Only publish real changes, so views don't redraw on every heartbeat.
+            if status != newStatus { status = newStatus }
+            setHealth(newStatus.version == Constants.helperVersion ? .running : .outdated)
             if let error = response.error { throw HelperError.message(error) }
             return response
         } catch let error as HelperError {
             throw error
         } catch {
-            health = .unreachable
+            setHealth(.unreachable)
             connection?.invalidate()
             connection = nil
             throw HelperError.message("Couldn't reach the helper: \(error.localizedDescription)")
         }
     }
 
+    private func setHealth(_ h: Health) {
+        if health != h { health = h }
+    }
+
     func refresh() async {
-        guard isInstalled else { health = .notInstalled; status = nil; return }
+        guard isInstalled else {
+            setHealth(.notInstalled)
+            if status != nil { status = nil }
+            return
+        }
         _ = try? await send(.status)
     }
 

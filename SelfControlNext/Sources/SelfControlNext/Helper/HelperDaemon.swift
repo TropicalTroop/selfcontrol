@@ -39,11 +39,15 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPCProtocol, @u
     private let stateURL: URL
     private var listener: NSXPCListener?
     private var timer: DispatchSourceTimer?
+    private var termSource: DispatchSourceSignal?
 
     private var lastTick = Date()
     private var lastHeartbeat = Date()   // grace period after the helper starts
     private var lastIntegrityCheck = Date.distantPast
     private var lastAllowlistResolve = Date.distantPast
+    private var lastPFCheck = Date.distantPast
+    private var usageDirty = false
+    private var lastUsageSave = Date()
     private var lastRelaunch = Date.distantPast
     private var terminated: [pid_t: Date] = [:]
 
@@ -81,8 +85,18 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPCProtocol, @u
             l.resume()
             listener = l
         }
+        // launchd sends SIGTERM on shutdown or helper updates: save buffered usage first.
+        signal(SIGTERM, SIG_IGN)
+        let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: queue)
+        term.setEventHandler { [weak self] in
+            self?.save()
+            exit(0)
+        }
+        term.resume()
+        termSource = term
+
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 2, repeating: 2)
+        t.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(500))
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         timer = t
@@ -105,12 +119,18 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPCProtocol, @u
     func handle(_ request: Data, withReply reply: @escaping (Data) -> Void) {
         queue.async {
             let error: String?
+            let decoded: HelperRequest
             do {
-                error = self.process(try JSON.decode(HelperRequest.self, request))
+                decoded = try JSON.decode(HelperRequest.self, request)
             } catch {
                 return reply(JSON.encode(HelperResponse(error: "Bad request: \(error)", status: self.status())))
             }
-            self.save()
+            error = self.process(decoded)
+            if case .heartbeat = decoded {
+                self.usageDirty = true      // saved by tick() at most every 30 s
+            } else {
+                self.save()
+            }
             reply(JSON.encode(HelperResponse(error: error, status: self.status())))
         }
     }
@@ -263,7 +283,10 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPCProtocol, @u
             WebsiteBlocker.apply(domains: domains, allowlist: allowlist)
         } else if !domains.isEmpty || allowlist != nil, now.timeIntervalSince(lastIntegrityCheck) >= 10 {
             lastIntegrityCheck = now
-            if !WebsiteBlocker.isIntact(domains: domains) {
+            // File checks are cheap; checking pf itself starts a process, so do that once a minute.
+            let checkPF = now.timeIntervalSince(lastPFCheck) >= 60
+            if checkPF { lastPFCheck = now }
+            if !WebsiteBlocker.isIntact(domains: domains, checkPF: checkPF) {
                 log("Website block was tampered with; re-applying")
                 WebsiteBlocker.apply(domains: domains, allowlist: allowlist)
             }
@@ -277,7 +300,12 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPCProtocol, @u
         }
 
         pruneUsage(now: now)
-        if dirty { save() }
+        if usageDirty && now.timeIntervalSince(lastUsageSave) >= 30 { dirty = true }
+        if dirty {
+            save()
+            usageDirty = false
+            lastUsageSave = now
+        }
     }
 
     /// Sites to block and, during an "allow only" session, the sites to allow.

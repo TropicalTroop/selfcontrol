@@ -3,8 +3,16 @@ import SwiftUI
 struct MenuBarView: View {
     @Environment(Store.self) private var store
     @Environment(\.openWindow) private var openWindow
+    @State private var visible = true
 
     var body: some View {
+        Group {
+            if visible { content } else { Color.clear.frame(width: 290, height: 40) }
+        }
+        .background(WindowVisibilityReader(isVisible: $visible))
+    }
+
+    private var content: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {

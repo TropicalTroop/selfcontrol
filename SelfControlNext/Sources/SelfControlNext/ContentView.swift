@@ -47,8 +47,16 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @Environment(Store.self) private var store
     @State private var selection: SidebarItem? = .overview
+    @State private var windowVisible = true
 
     var body: some View {
+        Group {
+            if windowVisible { splitView } else { Color.clear }
+        }
+        .background(WindowVisibilityReader(isVisible: $windowVisible))
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
             List(selection: $selection) {
                 Section {

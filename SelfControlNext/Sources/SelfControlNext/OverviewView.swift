@@ -166,7 +166,7 @@ struct OverviewView: View {
                 .chartYAxis {
                     AxisMarks(position: .leading) { value in
                         AxisGridLine()
-                        AxisValueLabel { if let h = value.as(Double.self) { Text("\(h, specifier: "%.0f")h") } }
+                        AxisValueLabel { if let h = value.as(Double.self) { Text(formatDuration(h * 3600)) } }
                     }
                 }
                 .frame(height: 170)

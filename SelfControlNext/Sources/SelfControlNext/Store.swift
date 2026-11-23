@@ -74,7 +74,10 @@ final class Store {
     }
 
     func saveConfig() { write(config, to: "config.json") }
-    func saveState() { write(state, to: "state.json") }
+    func saveState() {
+        flushUsage()
+        write(state, to: "state.json")
+    }
     func saveAll() { saveConfig(); saveState() }
 
     private func pruneHistory() {
@@ -188,47 +191,72 @@ final class Store {
 
     // MARK: Usage
 
+    // Per-second usage goes into these unobserved buffers, and is copied into `state` (which the
+    // UI observes) every 10 seconds by flushUsage(). Reads include the buffers, so enforcement still
+    // sees every second; only on-screen numbers update less often (they show minutes anyway).
+    @ObservationIgnored private var liveUsage: [String: [String: Double]] = [:]
+    @ObservationIgnored private var liveWebUsage: [String: [String: Double]] = [:]
+
     func addUsage(bundleID: String, name: String, seconds: TimeInterval, at date: Date = Date()) {
         let day = dayKey(date)
-        state.days[day, default: [:]][bundleID, default: 0] += seconds
+        liveUsage[day, default: [:]][bundleID, default: 0] += seconds
         pendingUsage[day, default: [:]][bundleID, default: 0] += seconds
         if state.appNames[bundleID] != name { state.appNames[bundleID] = name }
     }
 
-    /// Local usage, or the helper's if higher (so resetting local data doesn't reset limits).
-    func usage(for bundleID: String, on date: Date = Date()) -> TimeInterval {
-        let local = state.days[dayKey(date)]?[bundleID] ?? 0
-        guard Calendar.current.isDateInToday(date), let remote = helper.status?.usageToday[bundleID] else { return local }
-        return max(local, remote + (pendingUsage[dayKey(date)]?[bundleID] ?? 0))
-    }
-
     func addWebUsage(domain: String, seconds: TimeInterval, at date: Date = Date()) {
         let day = dayKey(date)
-        state.webDays[day, default: [:]][domain, default: 0] += seconds
+        liveWebUsage[day, default: [:]][domain, default: 0] += seconds
         pendingWebUsage[day, default: [:]][domain, default: 0] += seconds
+    }
+
+    /// Moves buffered usage into the observed state, refreshing the UI.
+    func flushUsage() {
+        guard !liveUsage.isEmpty || !liveWebUsage.isEmpty else { return }
+        for (day, apps) in liveUsage {
+            for (id, seconds) in apps { state.days[day, default: [:]][id, default: 0] += seconds }
+        }
+        for (day, sites) in liveWebUsage {
+            for (domain, seconds) in sites { state.webDays[day, default: [:]][domain, default: 0] += seconds }
+        }
+        liveUsage = [:]
+        liveWebUsage = [:]
+    }
+
+    private func merged(_ saved: [String: [String: Double]], _ live: [String: [String: Double]], _ day: String) -> [String: Double] {
+        (saved[day] ?? [:]).merging(live[day] ?? [:], uniquingKeysWith: +)
+    }
+
+    /// Local usage, or the helper's if higher (so resetting local data doesn't reset limits).
+    func usage(for bundleID: String, on date: Date = Date()) -> TimeInterval {
+        let day = dayKey(date)
+        let local = (state.days[day]?[bundleID] ?? 0) + (liveUsage[day]?[bundleID] ?? 0)
+        guard Calendar.current.isDateInToday(date), let remote = helper.usageToday[bundleID] else { return local }
+        return max(local, remote + (pendingUsage[day]?[bundleID] ?? 0))
     }
 
     /// Today's time on a site: local, or the helper's if higher.
     func webUsage(for domain: String, on date: Date = Date()) -> TimeInterval {
-        let local = state.webDays[dayKey(date)]?[domain] ?? 0
-        guard Calendar.current.isDateInToday(date), let remote = helper.status?.webUsageToday[domain] else { return local }
-        return max(local, remote + (pendingWebUsage[dayKey(date)]?[domain] ?? 0))
+        let day = dayKey(date)
+        let local = (state.webDays[day]?[domain] ?? 0) + (liveWebUsage[day]?[domain] ?? 0)
+        guard Calendar.current.isDateInToday(date), let remote = helper.webUsageToday[domain] else { return local }
+        return max(local, remote + (pendingWebUsage[day]?[domain] ?? 0))
     }
 
     func topSites(on date: Date = Date(), limit: Int = 50) -> [(domain: String, seconds: TimeInterval)] {
-        (state.webDays[dayKey(date)] ?? [:])
-            .map { ($0.key, webUsage(for: $0.key, on: date)) }
+        merged(state.webDays, liveWebUsage, dayKey(date)).keys
+            .map { ($0, webUsage(for: $0, on: date)) }
             .sorted { $0.1 > $1.1 }
             .prefix(limit)
             .map { ($0.0, $0.1) }
     }
 
     func totalUsage(on date: Date = Date()) -> TimeInterval {
-        state.days[dayKey(date)]?.values.reduce(0, +) ?? 0
+        merged(state.days, liveUsage, dayKey(date)).values.reduce(0, +)
     }
 
     func topApps(on date: Date = Date(), limit: Int = 8) -> [(bundleID: String, name: String, seconds: TimeInterval)] {
-        (state.days[dayKey(date)] ?? [:])
+        merged(state.days, liveUsage, dayKey(date))
             .sorted { $0.value > $1.value }
             .prefix(limit)
             .map { ($0.key, displayName(for: $0.key), $0.value) }
@@ -241,11 +269,13 @@ final class Store {
     }
 
     func resetToday() {
+        liveUsage[dayKey()] = nil
         state.days[dayKey()] = [:]
         saveState()
     }
 
     func clearHistory() {
+        liveUsage = [:]
         state.days = [:]
         saveState()
     }

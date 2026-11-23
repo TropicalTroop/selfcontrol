@@ -8,7 +8,7 @@ enum Constants {
     static let helperPath = "/Library/PrivilegedHelperTools/org.eyebeam.SelfControlNext.helper"
     static let helperPlistPath = "/Library/LaunchDaemons/org.eyebeam.SelfControlNext.helper.plist"
     /// Bump whenever the helper's behavior or protocol changes so the app offers an update.
-    static let helperVersion = 2
+    static let helperVersion = 3
 
     /// Apps that are never blocked, regardless of rules.
     static let essentialBundleIDs: Set<String> = [
@@ -309,7 +309,7 @@ enum HelperRequest: Codable {
     case prepareUninstall
 }
 
-struct HelperStatus: Codable {
+struct HelperStatus: Codable, Equatable {
     var version: Int
     var focus: FocusSession?
     var rules: Rules?
